@@ -31,8 +31,8 @@ class Circuito(Node, Odom, Laser):
                 # 'lower': (15, 91, 50),
                 # 'upper': (38, 255, 255)
 
-                'lower': (57, 73, 99),
-                'upper': (91, 255, 255)
+                'lower': (57, 116, 0),
+                'upper': (67, 255, 255)
             },
             'azul': {
                 'lower': (100, 100, 100),
@@ -62,9 +62,11 @@ class Circuito(Node, Odom, Laser):
             'girar': self.girar,
             'para': self.para,     
             'alvo_novo': self.alvo_novo,
-            'segue_novo': self.segue_novo      
+            'segue_novo': self.segue_novo,
+            'girar': self.girar,
+            'voltar_centro': self.voltar_centro,
         }
-
+        voltando_flag = False
         self.threshold = 5
 
         # Inicialização de variáveis
@@ -76,7 +78,7 @@ class Circuito(Node, Odom, Laser):
         self.volta_completa = False
         self.x_i=self.x
         self.y_i=self.y
-        self.vel=0.2
+        self.vel=0.5
 
 
         self.cacando_flag = False
@@ -94,26 +96,34 @@ class Circuito(Node, Odom, Laser):
         # self.get_logger().info('Cor: {}'.format(self.cor))
         mask = cv2.inRange(hsv, self.cores[self.cor]['lower'], self.cores[self.cor]['upper'])
         mask[:int(h/2),:] = 0
-        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.kernel)
-        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel)
+        # mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.kernel)
+        # mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel)
         
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
+        cv2.imshow("cv_image", mask)
+        cv2.waitKey(1)
+        self.get_logger().info(f'len(contours): {len(contours)}')
         if len(contours) > 0:
             contour = max(contours, key=cv2.contourArea)
-            cv2.drawContours(cv_image, contour, -1, [255, 0, 0], 3)
+            if cv2.contourArea(contour) > 1:
+                
+                cv2.drawContours(cv_image, contour, -1, [255, 0, 0], 3)
 
-            M = cv2.moments(contour)
-            self.cx = int(M["m10"] / M["m00"])
-            self.cy = int(M["m01"] / M["m00"])
+                M = cv2.moments(contour)
+                self.cx = int(M["m10"] / M["m00"])
+                self.cy = int(M["m01"] / M["m00"])
 
-            cv2.circle(cv_image, (self.cx, self.cy), 5, (0, 0, 255), -1)
+                cv2.circle(cv_image, (self.cx, self.cy), 5, (0, 0, 255), -1)
 
-            cv2.imshow("cv_image", mask)
-            cv2.waitKey(1)
+                # cv2.imshow("cv_image", mask)
+                # cv2.waitKey(1)
+            else:
+                self.cx = np.inf
         else:
-            cv2.imshow("cv_image", cv_image)
-            cv2.waitKey(1)
+            
+            # cv2.imshow("cv_image", cv_image)
+            # cv2.waitKey(1)
             self.cx = np.inf
         
     def segue(self):
@@ -131,13 +141,13 @@ class Circuito(Node, Odom, Laser):
             self.twist.angular.z = 0.3
         else:
             erro = self.w - self.cx            
-            self.twist.linear.x = 0.5
+            self.twist.linear.x = self.vel
             self.twist.angular.z=self.kp*erro
 
     def para(self):
         self.twist = Twist()
         self.goal_yaw = self.yaw+np.pi/2
-        if self.cacando_flag == True:
+        if self.cacando_flag == True and self.voltando_flag == True:
             self.robot_state='para'
         else:
             self.robot_state='girar'
@@ -174,9 +184,37 @@ class Circuito(Node, Odom, Laser):
             if self.distancia < 0.19:
                 self.twist.linear.x = 0.0
                 self.twist.angular.z = 0.0
-                self.robot_state = 'para'
-            
-            
+                self.goal_yaw = self.yaw + np.pi
+                self.robot_state = 'girar'
+                self.voltando_flag = True
+
+
+
+    def girar(self):
+        erro_yaw = self.goal_yaw - self.yaw
+        erro_yaw = np.arctan2(np.sin(erro_yaw), np.cos(erro_yaw))
+        
+        print(f"Girando - erro: {np.rad2deg(erro_yaw):.1f} graus")
+        if abs(erro_yaw) < np.deg2rad(2):
+            self.twist.angular.z = 0.0
+            print("Giro completo - voltando ao centro")
+            self.robot_state = 'voltar_centro'
+        else:
+            self.twist.angular.z = 0.1 * np.sign(erro_yaw)
+
+    def voltar_centro(self):
+        erro_x_i_x1 = abs(self.x_i - self.x)
+        print(f"Voltando ao centro - erro: {erro_x_i_x1:.2f}")
+        
+        self.twist.linear.x = 0.1 * erro_x_i_x1
+        
+        if erro_x_i_x1 < 0.1:
+            print("Chegou ao centro - preparando para soltar")
+            self.twist.linear.x = 0.0
+            self.twist.angular.z = 0.0
+            self.robot_state = 'para'
+
+
     def control(self):
         self.twist = Twist()
         print(f'Estado Atual: {self.robot_state}')
