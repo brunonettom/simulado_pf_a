@@ -20,6 +20,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
+            'q1=avaliacao_ai.q1:main',
         ],
     },
 )
