@@ -1,4 +1,5 @@
 import time
+import math
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import ReliabilityPolicy, QoSProfile
@@ -64,23 +65,26 @@ class Circuito(Node, Odom, Laser):
             'alvo_novo': self.alvo_novo,
             'segue_novo': self.segue_novo,
             'girar': self.girar,
-            'voltar_centro': self.voltar_centro,
+            'center': self.center,
+            'goto': self.goto,
+
         }
         voltando_flag = False
         self.threshold = 5
+        self.twist = Twist()
 
         # Inicialização de variáveis
-        self.twist = Twist()
-        self.cx = np.inf
-        self.kp=0.007
-        self.rodancia=0.25
-
-        self.volta_completa = False
         self.x_i=self.x
         self.y_i=self.y
-        self.vel=0.5
+        self.cx = np.inf
 
+        self.volta_completa = False
+        self.v_angular=0.3
+        self.vel=0.7
+        self.kp_linear = 0.15  # Constante proporcional para o controle linear
+        self.kp_angular = 1.2
 
+        self.chegou_flag = False
         self.cacando_flag = False
 
 
@@ -138,18 +142,18 @@ class Circuito(Node, Odom, Laser):
 
         
         if self.cx==np.inf:
-            self.twist.angular.z = 0.3
+            self.twist.angular.z = self.v_angular
         else:
             erro = self.w - self.cx            
             self.twist.linear.x = self.vel
-            self.twist.angular.z=self.kp*erro
+            self.twist.angular.z=self.kp_angular*erro
 
     def para(self):
         self.twist = Twist()
         self.goal_yaw = self.yaw+np.pi/2
         if self.cacando_flag == True and self.voltando_flag == True:
-            self.robot_state='para'
-        else:
+            self.robot_state='center'
+        elif self.chegou_flag== False:
             self.robot_state='girar'
         
     def girar(self):
@@ -162,7 +166,7 @@ class Circuito(Node, Odom, Laser):
             self.tempo_objetivo=int(self.tempo_objetivo.sec)+5
             self.robot_state='alvo_novo'
         else:
-            self.twist.angular.z=self.rodancia
+            self.twist.angular.z=self.v_angular
     
     def alvo_novo(self):
         self.cor=self.cor_nova
@@ -173,10 +177,10 @@ class Circuito(Node, Odom, Laser):
     def segue_novo(self):
         
         if self.cx==np.inf:
-            self.twist.angular.z = 0.3
+            self.twist.angular.z = self.v_angular
         else:
             erro_angular = self.w - self.cx            
-            self.twist.angular.z=self.kp*erro_angular
+            self.twist.angular.z=self.kp_angular*erro_angular
             self.distancia = min(self.front)
             if self.distancia > 10:
                 self.distancia = 3
@@ -185,34 +189,45 @@ class Circuito(Node, Odom, Laser):
                 self.twist.linear.x = 0.0
                 self.twist.angular.z = 0.0
                 self.goal_yaw = self.yaw + np.pi
-                self.robot_state = 'girar'
+                self.robot_state = 'para'
                 self.voltando_flag = True
 
-
-
-    def girar(self):
-        erro_yaw = self.goal_yaw - self.yaw
-        erro_yaw = np.arctan2(np.sin(erro_yaw), np.cos(erro_yaw))
-        
-        print(f"Girando - erro: {np.rad2deg(erro_yaw):.1f} graus")
-        if abs(erro_yaw) < np.deg2rad(2):
-            self.twist.angular.z = 0.0
-            print("Giro completo - voltando ao centro")
-            self.robot_state = 'voltar_centro'
+    '''
+    goto
+    '''
+    def center(self):
+        # faz o robô girar até que ele esteja 
+        # alinhado com o ponto desejado.
+        delta_x = self.x_i - self.x
+        delta_y = self.y_i - self.y
+        angulo = math.atan2(delta_y, delta_x)
+        erro = math.atan2(math.sin(angulo - self.yaw), math.cos(angulo - self.yaw))
+        print(f'erro:{math.degrees(erro):.3f}')
+        print(f'angulo:{math.degrees(angulo):.3f}')
+        print(f'yaw:{math.degrees(self.yaw):.3f}')
+        print(f'x_i: {self.x_i}')
+        print(f'y_i: {self.y_i}')
+        print(f'delta_x: {delta_x}')
+        print(f'delta_y: {delta_y}')
+        print(f'tg: {math.tan(angulo)}')
+        if abs(math.degrees(erro)) > 5:
+            self.twist.angular.z = self.kp_angular * erro
         else:
-            self.twist.angular.z = 0.1 * np.sign(erro_yaw)
+            self.robot_state = 'goto'
 
-    def voltar_centro(self):
-        erro_x_i_x1 = abs(self.x_i - self.x)
-        print(f"Voltando ao centro - erro: {erro_x_i_x1:.2f}")
+    def acha_distancia(self, x0, x1, y0, y1):
+        return math.sqrt((x0 - x1) ** 2 + (y0 - y1) ** 2)
+
+    def goto(self):
+        distancia = self.acha_distancia(self.x, self.x_i, self.y, self.y_i)
         
-        self.twist.linear.x = 0.1 * erro_x_i_x1
-        
-        if erro_x_i_x1 < 0.1:
-            print("Chegou ao centro - preparando para soltar")
+        if distancia > 0.3:
+            self.twist.linear.x = self.kp_linear * distancia
+        else:
             self.twist.linear.x = 0.0
-            self.twist.angular.z = 0.0
+            self.chegou_flag = True
             self.robot_state = 'para'
+
 
 
     def control(self):
