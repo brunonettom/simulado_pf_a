@@ -270,8 +270,8 @@ class Circuito(Node, Odom, Laser):
 
     def control(self):
         self.twist = Twist()
-        self.contador+=1
-        if self.contador%(self.intervalo_do_contador*5)==0:
+        self.contador+=1                        # CONTADOR+=1
+        if self.contador%(self.intervalo_do_contador*5)==0:         # CONTADOR
             print(f'ESTADO ATUAAAAAAAAAAAAAAAAAAAAL: {self.robot_state}')
         self.state_machine[self.robot_state]()
         self.cmd_vel_pub.publish(self.twist)
